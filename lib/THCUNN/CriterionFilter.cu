@@ -5,6 +5,23 @@
 #include <assert.h>
 
 #include <thrust/functional.h>
+__global__ void cunn_CriterionFilter_updateOutput_kernel(
+          float *target,
+          float *ignored_label,
+          int bound,
+          int batch_size,
+          int map_nelem,
+          int blocks_per_sample)
+{
+  int i, t;
+  int sample = blockIdx.x / blocks_per_sample;
+  int step = blockDim.x * blocks_per_sample;
+  int toffset = sample * map_nelem;
+  int ignored_label_num = (int)(ignored_label)
+  for (i = (blockIdx.x % blocks_per_sample) * blockDim.x + threadIdx.x; i < map_nelem; i += step) {
+    target[toffset + i] = (float) bound + 1;
+  }
+}
 
 __global__ void cunn_CriterionFilter_updateGradInput_kernel(
           float *gradInput,
@@ -28,6 +45,49 @@ __global__ void cunn_CriterionFilter_updateGradInput_kernel(
       for (j = 0; j < n_classes; j++) gradInput[ioffset + j * map_nelem + i] = 0;
     }
   }
+}
+
+void THNN_CudaCriterionFilter_updateOutput(THCState *state, THCudaTensor *target, THCudaTensor *input, THCudaTensor *ignored_label) {
+  int n_dims = THCudaTensor_nDimension(state, target);
+  int bound = THCudaTensor_size(state, input, 1);
+
+  target = THCudaTensor_newContiguous(state, target);
+  ignored_label = THCudaTensor_newContiguous(state, ignored_label);
+
+  float *target_data = THCudaTensor_data(state, target);
+  float *ignored_label_data = THCudaTensor_data(state, ignored_label);
+
+  long batch_size = THCudaTensor_size(state, target, 0);
+  long map_nelem = THCudaTensor_nElement(state, target) / batch_size;
+  int blocks_per_sample = GET_BLOCKS(map_nelem) / 512;
+
+  blocks_per_sample = (blocks_per_sample == 0) ? 1 : blocks_per_sample;
+  int total_blocks = blocks_per_sample * batch_size;
+
+  int size_1, size_2, size_3;
+  if (n_dims == 1) {
+    size_1 = THCudaTensor_size(state, target, 0)
+    size_2 = 1;
+    size_3 = 1;
+  } else if (n_dims == 2) {
+    size_1 = 1;
+    size_2 = THCudaTensor_size(state, target, 0);
+    size_3 = THCudaTensor_size(state, target, 1);
+  } else if (n_dims == 3) {
+    size_1 = THCudaTensor_size(state, target, 0);
+    size_2 = THCudaTensor_size(state, target, 1);
+    size_3 = THCudaTensor_size(state, target, 2);
+  } else {THError("Target Tensor should be 1D~3D tensor!");}
+  cunn_CriterionFilter_updateOutput_kernel<<<total_blocks, CUDA_NUM_THREADS, 0, THCState_getCurrentStream(state)>>>(
+    target_data,
+    input_data,
+    ignored_label_data,
+    bound,
+    size_1,
+    size_2 * size_3,
+    blocks_per_sample
+  );
+
 }
 
 void THNN_CudaCriterionFilter_updateGradInput(THCState *state, THCudaTensor *target, THCudaTensor *gradInput, THCudaTensor *ignored_label) {
