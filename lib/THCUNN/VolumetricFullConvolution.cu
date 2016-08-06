@@ -81,7 +81,7 @@ void THNN_CudaVolumetricFullConvolution_updateOutput(
     long k = weight->size[0];
 
     // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
-    THCudaBlas_gemm(
+    THCudaBlas_Sgemm(
         state,
         'n', 't',
         n, m, k,
@@ -97,6 +97,7 @@ void THNN_CudaVolumetricFullConvolution_updateOutput(
       THCState_getCurrentStream(state),
       THCudaTensor_data(state, columns),
       nOutputPlane, outputDepth, outputHeight, outputWidth, kT, kH, kW, padT, padH, padW, dT, dH, dW,
+      1,1,1,
       THCudaTensor_data(state, output_n)
     );
 
@@ -108,7 +109,7 @@ void THNN_CudaVolumetricFullConvolution_updateOutput(
     long k_ = 1;
 
     // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
-    THCudaBlas_gemm(
+    THCudaBlas_Sgemm(
         state,
         't', 'n',
         n_, m_, k_,
@@ -195,6 +196,7 @@ void THNN_CudaVolumetricFullConvolution_updateGradInput(
       THCState_getCurrentStream(state),
       THCudaTensor_data(state, gradOutput_n),
       nOutputPlane, outputDepth, outputHeight, outputWidth, kT, kH, kW, padT, padH, padW, dT, dH, dW,
+      1,1,1,
       THCudaTensor_data(state, gradColumns)
     );
 
@@ -206,7 +208,7 @@ void THNN_CudaVolumetricFullConvolution_updateGradInput(
     long k = weight->size[1] * weight->size[2] * weight->size[3] * weight->size[4];
 
     // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
-    THCudaBlas_gemm(
+    THCudaBlas_Sgemm(
         state,
         'n', 'n',
         n, m, k,
@@ -301,6 +303,7 @@ void THNN_CudaVolumetricFullConvolution_accGradParameters(
       THCState_getCurrentStream(state),
       THCudaTensor_data(state, gradOutput_n),
       nOutputPlane, outputDepth, outputHeight, outputWidth, kT, kH, kW, padT, padH, padW, dT, dH, dW,
+      1,1,1,
       THCudaTensor_data(state, columns)
     );
 
@@ -311,7 +314,7 @@ void THNN_CudaVolumetricFullConvolution_accGradParameters(
     long k = columns->size[1];   // inputHeight * inputWidth
 
     // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
-    THCudaBlas_gemm(
+    THCudaBlas_Sgemm(
         state,
         't', 'n',
         n, m, k,
@@ -329,7 +332,7 @@ void THNN_CudaVolumetricFullConvolution_accGradParameters(
     long k_ = outputDepth * outputHeight * outputWidth;
 
     // Do GEMV (note: this is a bit confusing because gemv assumes column-major matrices)
-    THCudaBlas_gemv(
+    THCudaBlas_Sgemv(
         state,
         't',
         k_, m_,

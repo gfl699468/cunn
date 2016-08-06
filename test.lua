@@ -304,6 +304,31 @@ function cunntest.LogSoftMax_backward()
    pointwise_backward(nn.LogSoftMax(), 'LogSoftMax', precision_backward)
 end
 
+function cunntest.SpatialSoftMax()
+   local bs = math.random(32,256)
+   local dim = torch.random(1, 50)
+   local h = torch.random(1, 50)
+   local w = torch.random(1, 50)
+
+   local input = torch.randn(bs, dim, h, w)
+   local sconv = nn.SpatialSoftMax()
+   local groundtruth = sconv:forward(input)
+   local gradOutput = groundtruth:clone():fill(0.5)
+   local gradInput = sconv:backward(input, gradOutput)
+
+   input = input:cuda()
+   gradOutput = gradOutput:cuda()
+   local gconv = nn.SpatialSoftMax():cuda()
+   local rescuda = gconv:forward(input)
+   local gradcuda = gconv:backward(input, gradOutput)
+
+   local error = rescuda:float() - groundtruth
+   mytester:assertlt(error:abs():max(), precision_forward*10, 'error on state (forward) ')
+
+   local error = gradcuda:float() - gradInput
+   mytester:assertlt(error:abs():max(), precision_backward*10, 'error on state (backward) ')
+end
+
 function cunntest.LogSoftMax_forward_batch()
    local size = math.random(1,256)
    local bs = math.random(32,256)
@@ -1593,8 +1618,8 @@ function cunntest.SpatialDilatedConvolution_forward_single()
    local padH = math.random(0,1)
    local outi = math.random(ki, 64)
    local outj = math.random(kj, 64)
-   local dilationW = math.random(0,10)
-   local dilationH = math.random(0,10)
+   local dilationW = math.random(1,10)
+   local dilationH = math.random(1,10)
    local ini = (outi - 1) * si - 2 * padW + dilationW * (ki-1) + 1
    local inj = (outj - 1) * sj - 2 * padH + dilationH * (kj-1) + 1
 
@@ -5084,6 +5109,59 @@ function cunntest.VolumetricFullConvolution()
     end
 end
 
+function cunntest.VolumetricDilatedConvolution()
+   local from = math.random(1,32)
+   local to = math.random(1,8) * 8
+   local ki = math.random(3,15)
+   local kj = math.random(3,15)
+   local kk = math.random(3,15)
+   local si = math.random(1,3)
+   local sj = math.random(1,3)
+   local sk = math.random(1,3)
+   local padW = math.random(0,1)
+   local padH = math.random(0,1)
+   local padT = math.random(0,1)
+   local outi = math.random(ki, 64)
+   local outj = math.random(kj, 64)
+   local outk = math.random(kj, 64)
+   local dilationW = math.random(1,10)
+   local dilationH = math.random(1,10)
+   local dilationT = math.random(1,10)
+   local ini = (outi - 1) * si - 2 * padW + dilationW * (ki-1) + 1
+   local inj = (outj - 1) * sj - 2 * padH + dilationH * (kj-1) + 1
+   local ink = (outk - 1) * sk - 2 * padT + dilationT * (kk-1) + 1
+
+   local input = torch.randn(from,ink,inj,ini)
+   local sconv = nn.VolumetricDilatedConvolution(from,to,kk,ki,kj,sk,si,sj,padT,padW,padH,dilationT,dilationW,dilationH)
+   local output = sconv:forward(input)
+   local gradOutput = output:clone():normal()
+   sconv:zeroGradParameters()
+   local groundgrad = sconv:backward(input, gradOutput)
+   local groundweight = sconv.gradWeight
+   local groundbias = sconv.gradBias
+
+   input = input:cuda()
+   gradOutput = gradOutput:cuda()
+   local gconv = nn.VolumetricDilatedConvolution(from,to,kk,ki,kj,sk,si,sj,padT,padW,padH,dilationT,dilationW,dilationH):cuda()
+   gconv.weight = sconv.weight:cuda()
+   gconv.bias = sconv.bias:cuda()
+   local rescuda = gconv:forward(input)
+   gconv:zeroGradParameters()
+   local gradcuda = gconv:backward(input, gradOutput)
+   local weightcuda = gconv.gradWeight
+   local biascuda = gconv.gradBias
+
+   local error = rescuda:float() - output
+   local gerror = gradcuda:float() - groundgrad
+   local werror = weightcuda:float() - groundweight
+   local berror = biascuda:float() - groundbias
+
+   mytester:assertlt(error:abs():max(), precision_forward, 'error on state (forward) ')
+   mytester:assertlt(gerror:abs():max(), precision_backward, 'error on state (backward) ')
+   mytester:assertlt(werror:abs():max(), precision_backward, 'error on weight (backward) ')
+   mytester:assertlt(berror:abs():max(), precision_backward, 'error on bias (backward) ')
+end
+
 function cunntest.LookupTable_forward()
    local nVocab = 10000
    local nDim = 100
@@ -5520,126 +5598,126 @@ function cunntest.GPU()
       return
    end
    assert(nn.GPU, "Please update nn to latest version")
-   
+
    local originaldevice = cutorch.getDevice()
-   
+
    cutorch.setDevice(1)
    local linear = nn.Linear(3,4)
    local linear2 = linear:clone():float()
    linear.mybuffer = {torch.CudaTensor(3)}
-   
+
    local gpu = nn.GPU(linear, 2, 1)
    gpu:cuda()
-   
+
    mytester:assert(linear.mybuffer[1]:getDevice() == 2)
    mytester:assert(linear.weight:getDevice() == 2)
    mytester:assert(cutorch.getDevice() == originaldevice)
-   
+
    local input = torch.CudaTensor(2,3):uniform(0,1)
    local output = gpu:forward(input)
-   
+
    mytester:assert(linear.output:getDevice() == 2)
    mytester:assert(output:getDevice() == 1)
    mytester:assert(gpu._input:getDevice() == 2)
-   
+
    local gradOutput = torch.CudaTensor(2,4):uniform(0,1)
    gpu:zeroGradParameters()
    mytester:assert(cutorch.getDevice() == 1)
    local gradInput = gpu:backward(input, gradOutput)
-   
+
    mytester:assert(cutorch.getDevice() == 1)
    mytester:assert(gpu._gradOutput:getDevice() == 2)
    mytester:assert(linear.gradInput:getDevice() == 2)
    mytester:assert(gradInput:getDevice() == 1)
-   
+
    mytester:assert(cutorch.getDevice() == 1)
    local input2, gradOutput2 = input:float(), gradOutput:float()
    local output2 = linear2:forward(input2)
    linear2:zeroGradParameters()
    local gradInput2 = linear2:backward(input2, gradOutput2)
-   
-   
+
+
    mytester:assertTensorEq(input2, input:float(), 0.000001)
    mytester:assertTensorEq(gradInput2, gradInput:float(), 0.000001)
-   
+
    local params, gradParams = gpu:parameters()
    local params2, gradParams2 = linear2:parameters()
-   
+
    for i=1,#params do
       mytester:assertTensorEq(params2[i], params[i]:float(), 0.000001)
       mytester:assertTensorEq(gradParams2[i], gradParams[i]:float(), 0.000001)
    end
-   
+
    -- test serialize/deserialize
-   
+
    local gpustr = torch.serialize(gpu)
    mytester:assert(cutorch.getDevice() == 1)
    local gpu2 = torch.deserialize(gpustr)
    mytester:assert(cutorch.getDevice() == 1)
-   
+
    local output2 = gpu2:forward(input)
-   
+
    mytester:assert(gpu2.modules[1].output:getDevice() == 2)
    mytester:assert(output2:getDevice() == 1)
    mytester:assert(gpu2._input:getDevice() == 2)
-   
+
    gpu2:zeroGradParameters()
    mytester:assert(cutorch.getDevice() == 1)
    local gradInput2 = gpu2:backward(input, gradOutput)
-   
+
    mytester:assert(cutorch.getDevice() == 1)
    mytester:assert(gpu2._gradOutput:getDevice() == 2)
    mytester:assert(gpu2.modules[1].gradInput:getDevice() == 2)
    mytester:assert(gradInput2:getDevice() == 1)
-   
+
    mytester:assertTensorEq(input2, input2, 0.000001)
    mytester:assertTensorEq(gradInput2, gradInput2, 0.000001)
-   
+
    local params, gradParams = gpu:parameters()
    local params2, gradParams2 = gpu2:parameters()
-   
+
    for i=1,#params do
       mytester:assert(params2[i]:getDevice() == params[i]:getDevice())
       mytester:assert(gradParams2[i]:getDevice() == gradParams[i]:getDevice())
       mytester:assertTensorEq(params2[i]:float(), params[i]:float(), 0.000001)
       mytester:assertTensorEq(gradParams2[i]:float(), gradParams[i]:float(), 0.000001)
    end
-   
-   
+
+
    -- test table input/output
    local lin1, lin2 = nn.Linear(3,4), nn.Linear(3,4)
    local para = nn.ParallelTable():add(lin1):add(lin2)
    local para2 = para:clone():float()
    local gpu = nn.GPU(para, 2, 1)
-   
+
    gpu:cuda()
    mytester:assert(lin1.weight:getDevice() == 2)
    mytester:assert(lin2.weight:getDevice() == 2)
    mytester:assert(cutorch.getDevice() == 1)
-   
+
    local device3 = cutorch.getDeviceCount()
    local input = {
-      torch.CudaTensor(2,3):uniform(0,1), 
+      torch.CudaTensor(2,3):uniform(0,1),
       cutorch.withDevice(device3, function() return torch.CudaTensor(2,3):uniform(0,1) end) -- tests input from multiple devices
    }
    local output = gpu:forward(input)
-   
+
    mytester:assert(para.output[1]:getDevice() == 2)
    mytester:assert(para.output[2]:getDevice() == 2)
    mytester:assert(output[1]:getDevice() == 1)
    mytester:assert(output[2]:getDevice() == 1)
    mytester:assert(gpu._input[1]:getDevice() == 2)
    mytester:assert(gpu._input[2]:getDevice() == 2)
-   
+
    local gradOutput = {
-      torch.CudaTensor(2,4):uniform(0,1), 
+      torch.CudaTensor(2,4):uniform(0,1),
       cutorch.withDevice(device3, function() return torch.CudaTensor(2,4):uniform(0,1) end) -- tests gradOutput from multiple devices
    }
-   
+
    gpu:zeroGradParameters()
    mytester:assert(cutorch.getDevice() == 1)
    local gradInput = gpu:backward(input, gradOutput)
-   
+
    mytester:assert(cutorch.getDevice() == 1)
    mytester:assert(gpu._gradOutput[1]:getDevice() == 2)
    mytester:assert(gpu._gradOutput[2]:getDevice() == 2)
@@ -5647,44 +5725,44 @@ function cunntest.GPU()
    mytester:assert(para.gradInput[2]:getDevice() == 2)
    mytester:assert(gradInput[1]:getDevice() == 1)
    mytester:assert(gradInput[2]:getDevice() == device3)
-   
+
    local input2, gradOutput2 = {input[1]:float(), input[2]:float()}, {gradOutput[1]:float(), gradOutput[2]:float()}
    local output2 = para2:forward(input2)
    para2:zeroGradParameters()
    local gradInput2 = para2:backward(input2, gradOutput2)
-   
+
    mytester:assertTensorEq(input2[1], input[1]:float(), 0.000001)
    mytester:assertTensorEq(input2[2], input[2]:float(), 0.000001)
    mytester:assertTensorEq(gradInput2[1], gradInput[1]:float(), 0.000001)
    mytester:assertTensorEq(gradInput2[2], gradInput[2]:float(), 0.000001)
-   
+
    local params, gradParams = gpu:parameters()
    local params2, gradParams2 = para2:parameters()
-   
+
    for i=1,#params do
       mytester:assertTensorEq(params2[i], params[i]:float(), 0.000001)
       mytester:assertTensorEq(gradParams2[i], gradParams[i]:float(), 0.000001)
-   end 
-   
+   end
+
    -- test that it handles reduction in input/output size
-   
+
    input[2], gradOutput[2] = nil, nil
    para.modules[2] = nil
    para.output[2] = nil
    para.gradInput[2] = nil
-   
+
    local output = gpu:forward(input)
-   
+
    mytester:assert(#gpu._input == 1)
    mytester:assert(#output == 1)
-   
+
    local gradInput = gpu:backward(input, gradOutput)
-   
+
    mytester:assert(#gpu._gradOutput == 1)
    mytester:assert(#gradInput == 1)
-   
+
    -- test sequential multi-GPUs
-   
+
    local mlp = nn.Sequential()
    for device=1,ndevice do
       local outdevice = device == ndevice and 1 or device
@@ -5693,41 +5771,41 @@ function cunntest.GPU()
    end
    mlp:cuda()
    mytester:assert(cutorch.getDevice() == 1)
-   
+
    local input = torch.CudaTensor(2,3):uniform(0,1)
    local gradOutput = torch.CudaTensor(2,3):uniform(0,1)
-   
+
    local output = mlp:forward(input)
    mlp:zeroGradParameters()
    local gradInput = mlp:backward(input, gradOutput)
-   
+
    -- test CPU only
-   
+
    local params, gradParams = mlp:parameters()
-   
+
    mlp:float()
-   
+
    local input2, gradOutput2 = input:float(), gradOutput:float()
-   
+
    local _cutorch = cutorch
    cutorch = nil
-   
+
    local output2 = mlp:forward(input2)
    mlp:zeroGradParameters()
    local gradInput2 = mlp:backward(input2, gradOutput2)
-   
+
    cutorch = _cutorch
-   
+
    mytester:assertTensorEq(output:float(), output2, 0.000001)
    mytester:assertTensorEq(gradInput:float(), gradInput2, 0.000001)
-   
+
    local params2, gradParams2 = mlp:parameters()
-   
+
    for i=1,#params do
       mytester:assertTensorEq(params[i]:float(), params2[i], 0.000001)
       mytester:assertTensorEq(gradParams[i]:float(), gradParams2[i], 0.000001)
    end
-   
+
    cutorch.setDevice(originaldevice)
 end
 
